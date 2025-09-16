@@ -21,6 +21,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("Please set BOT_TOKEN environment variable.")
 
+MAX_FILE_SIZE = 45 * 1024 * 1024  # ~45MB safe limit for Telegram bots
+
 # --- yt-dlp blocking function ---
 def run_yt_dlp(url: str, output_path: str = "downloads/") -> str:
     os.makedirs(output_path, exist_ok=True)
@@ -28,16 +30,19 @@ def run_yt_dlp(url: str, output_path: str = "downloads/") -> str:
     cookies_file = "cookies.txt"
     ydl_opts = {
         "outtmpl": f"{output_path}%(title)s.%(ext)s",
-        "format": "mp4/best",   # ✅ single stream (no ffmpeg)
+        "format": "mp4/best",
         "noplaylist": True,
         "quiet": True,
+        "retries": 3,
+        "socket_timeout": 30,  # ✅ timeout fix
     }
     if os.path.exists(cookies_file):
         ydl_opts["cookies"] = cookies_file
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
+        filepath = ydl.prepare_filename(info)
+        return filepath, info
 
 # /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -56,15 +61,26 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = await update.message.reply_text("⏳ Downloading... Please wait.")
 
     try:
-        # ✅ run yt-dlp in thread (avoid timeout in main loop)
-        filepath = await asyncio.to_thread(run_yt_dlp, url)
+        filepath, info = await asyncio.to_thread(run_yt_dlp, url)
 
-        if os.path.exists(filepath):
+        if not os.path.exists(filepath):
+            await status.edit_text("⚠️ Could not find downloaded file.")
+            return
+
+        size = os.path.getsize(filepath)
+        title = info.get("title", os.path.basename(filepath))
+
+        if size <= MAX_FILE_SIZE:
             with open(filepath, "rb") as f:
                 await update.message.reply_document(f, filename=os.path.basename(filepath))
             await status.delete()
         else:
-            await status.edit_text("⚠️ Could not find downloaded file.")
+            await status.edit_text(
+                f"⚠️ File too large for Telegram upload.\n\n"
+                f"Title: {title}\n"
+                f"Size: {size/1024/1024:.2f} MB\n"
+                f"Link: {info.get('webpage_url', url)}"
+            )
     except Exception as e:
         await status.edit_text(f"❌ Download failed: {str(e)}")
 
