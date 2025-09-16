@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -20,14 +21,14 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("Please set BOT_TOKEN environment variable.")
 
-# 📥 Download function (no ffmpeg required)
-def download_video(url: str, output_path: str = "downloads/"):
+# --- yt-dlp blocking function ---
+def run_yt_dlp(url: str, output_path: str = "downloads/") -> str:
     os.makedirs(output_path, exist_ok=True)
 
     cookies_file = "cookies.txt"
     ydl_opts = {
         "outtmpl": f"{output_path}%(title)s.%(ext)s",
-        "format": "mp4/best",   # ✅ single mp4 stream, no merge
+        "format": "mp4/best",   # ✅ single stream (no ffmpeg)
         "noplaylist": True,
         "quiet": True,
     }
@@ -52,15 +53,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handle links
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
+    status = await update.message.reply_text("⏳ Downloading... Please wait.")
+
     try:
-        filepath = download_video(url)
+        # ✅ run yt-dlp in thread (avoid timeout in main loop)
+        filepath = await asyncio.to_thread(run_yt_dlp, url)
+
         if os.path.exists(filepath):
             with open(filepath, "rb") as f:
                 await update.message.reply_document(f, filename=os.path.basename(filepath))
+            await status.delete()
         else:
-            await update.message.reply_text("⚠️ Could not find downloaded file.")
+            await status.edit_text("⚠️ Could not find downloaded file.")
     except Exception as e:
-        await update.message.reply_text(f"❌ Download failed: {str(e)}")
+        await status.edit_text(f"❌ Download failed: {str(e)}")
 
 # Main
 def main():
