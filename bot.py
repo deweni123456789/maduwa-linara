@@ -20,22 +20,23 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("Please set BOT_TOKEN environment variable.")
 
-# 📥 Download function
+# 📥 Download function (no ffmpeg required)
 def download_video(url: str, output_path: str = "downloads/"):
     os.makedirs(output_path, exist_ok=True)
 
-    # If cookies.txt exists, use it
     cookies_file = "cookies.txt"
     ydl_opts = {
         "outtmpl": f"{output_path}%(title)s.%(ext)s",
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
+        "format": "mp4/best",   # ✅ single mp4 stream, no merge
+        "noplaylist": True,
+        "quiet": True,
     }
     if os.path.exists(cookies_file):
         ydl_opts["cookies"] = cookies_file
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url, download=True)
+        return ydl.prepare_filename(info)
 
 # /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,8 +53,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     try:
-        download_video(url)
-        await update.message.reply_text("✅ Download started! Please wait...")
+        filepath = download_video(url)
+        if os.path.exists(filepath):
+            with open(filepath, "rb") as f:
+                await update.message.reply_document(f, filename=os.path.basename(filepath))
+        else:
+            await update.message.reply_text("⚠️ Could not find downloaded file.")
     except Exception as e:
         await update.message.reply_text(f"❌ Download failed: {str(e)}")
 
